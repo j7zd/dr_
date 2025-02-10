@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Document Scanning</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 1rem;
+        text-align: center;
+      }
+      #not-mobile-warning {
+        color: red;
+        margin-top: 2rem;
+      }
+      #scanning-interface {
+        display: none;
+        margin-top: 1rem;
+      }
+      video {
+        width: 100%;
+        max-width: 400px;
+        border: 1px solid #ccc;
+      }
+      canvas {
+        display: none;
+      }
+      img {
+        margin-top: 1rem;
+        max-width: 400px;
+        border: 1px solid #ccc;
+      }
+      #controls button {
+        font-size: 1rem;
+        padding: 0.5rem 1rem;
+        margin: 0.5rem;
+      }
+      #status-msg {
+        margin-top: 1rem;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="not-mobile-warning" style="display:none;">
+      <p>Please open this page on a mobile device to use the camera.</p>
+    </div>
+
+    <div id="scanning-interface">
+      <h2 id="step-title"></h2>
+      <video id="video" autoplay playsinline></video>
+      <canvas id="canvas"></canvas>
+      <div>
+        <img id="preview" style="display:none;" alt="Scan Preview">
+      </div>
+      <div id="controls">
+        <button id="capture-btn" style="display:none;">Capture</button>
+        <button id="confirm-btn" style="display:none;">Confirm</button>
+        <button id="restart-btn" style="display:none;">Restart Scan</button>
+      </div>
+      <p id="status-msg"></p>
+    </div>
+
+    <script>
+      const sessionId = "{{ session_id }}";
+      let currentStep = 'doc_front';
+      let videoStream = null;
+      let autoCaptureInterval = null;
+      let capturedDocFront = null;
+      let capturedDocBack = null;
+      let capturedFace = null;
+
+      function isMobile() {
+        return /Mobi|Android/i.test(navigator.userAgent);
+      }
+
+      async function startCamera(facingMode = 'environment') {
+        if (videoStream) {
+          videoStream.getTracks().forEach(track => track.stop());
+        }
+        try {
+          videoStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: facingMode }
+          });
+          document.getElementById('video').srcObject = videoStream;
+        } catch (err) {
+          console.error("Error accessing camera: ", err);
+          alert("Could not access camera.");
+        }
+      }
+
+      function captureFrame() {
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext('2d');
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg');
+      }
+
+      async function sendScanImage(imageDataUrl) {
+        const base64Data = imageDataUrl.split(',')[1];
+        try {
+          const response = await fetch(`/api/scan/add/${sessionId}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ image: base64Data })
+          });
+          return await response.json();
+        } catch (error) {
+          console.error("Error sending scan image: ", error);
+        }
+      }
+
+      async function autoCaptureLoop() {
+        document.getElementById('status-msg').innerText = "Scanning...";
+        const imageDataUrl = captureFrame();
+        const result = await sendScanImage(imageDataUrl);
+        console.log("Scan result:", result);
+        if (result && result.finished) {
+          clearInterval(autoCaptureInterval);
+          const previewImg = document.getElementById('preview');
+          previewImg.src = imageDataUrl;
+          previewImg.style.display = 'block';
+          document.getElementById('confirm-btn').style.display = 'inline-block';
+          document.getElementById('restart-btn').style.display = 'inline-block';
+          document.getElementById('status-msg').innerText = "Scan complete. Please confirm or restart.";
+          if (currentStep === 'doc_front') {
+            capturedDocFront = imageDataUrl;
+          } else if (currentStep === 'doc_back') {
+            capturedDocBack = imageDataUrl;
+          }
+        } else if (result) {
+          document.getElementById('status-msg').innerText = `Scanning... Consistent frames: ${result.test || 0}`;
+        }
+      }
+
+      async function startAutoCapture() {
+        if (autoCaptureInterval) {
+          clearInterval(autoCaptureInterval);
+        }
+        autoCaptureInterval = setInterval(autoCaptureLoop, 1000);
+      }
+
+      async function initDocScan(step) {
+        currentStep = step;
+        await startCamera('environment');
+        document.getElementById('step-title').innerText =
+          step === 'doc_front' ? "Scan Document - Side 1" : "Scan Document - Side 2";
+        document.getElementById('capture-btn').style.display = 'none';
+        document.getElementById('confirm-btn').style.display = 'none';
+        document.getElementById('restart-btn').style.display = 'none';
+        document.getElementById('preview').style.display = 'none';
+        startAutoCapture();
+      }
+
+      async function initFaceCapture() {
+        currentStep = 'face';
+        if (autoCaptureInterval) {
+          clearInterval(autoCaptureInterval);
+        }
+        await startCamera('user');
+        document.getElementById('step-title').innerText = "Capture Selfie";
+        document.getElementById('capture-btn').style.display = 'inline-block';
+        document.getElementById('confirm-btn').style.display = 'none';
+        document.getElementById('restart-btn').style.display = 'none';
+        document.getElementById('preview').style.display = 'none';
+        document.getElementById('status-msg').innerText = "Press 'Capture' to take a selfie.";
+      }
+
+      async function finalizeVerification() {
+        function dataURLtoBlob(dataurl) {
+          const arr = dataurl.split(','),
+                mime = arr[0].match(/:(.*?);/)[1],
+                bstr = atob(arr[1]), 
+                n = bstr.length, 
+                u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          return new Blob([u8arr], { type: mime });
+        }
+        if (!capturedDocFront || !capturedDocBack || !capturedFace) {
+          alert("Missing captured images.");
+          return;
+        }
+        const formData = new FormData();
+        formData.append('front_image', dataURLtoBlob(capturedDocFront), 'doc_front.jpg');
+        formData.append('back_image', dataURLtoBlob(capturedDocBack), 'doc_back.jpg');
+        formData.append('face_image', dataURLtoBlob(capturedFace), 'face.jpg');
+
+        try {
+          const response = await fetch(`/api/scan/confirm/${sessionId}`, {
+            method: 'POST',
+            body: formData
+          });
+          const result = await response.json();
+          console.log("Confirmation result:", result);
+          document.getElementById('status-msg').innerText = "Verification completed.";
+        } catch (err) {
+          console.error("Error finalizing verification:", err);
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', async function() {
+        if (!isMobile()) {
+          document.getElementById('not-mobile-warning').style.display = 'block';
+          return;
+        }
+        document.getElementById('scanning-interface').style.display = 'block';
+        await initDocScan('doc_front');
+      });
+
+      document.getElementById('confirm-btn').addEventListener('click', async function() {
+        if (currentStep === 'doc_front') {
+          clearInterval(autoCaptureInterval);
+          await initDocScan('doc_back');
+        } else if (currentStep === 'doc_back') {
+          clearInterval(autoCaptureInterval);
+          await initFaceCapture();
+        }
+      });
+
+      document.getElementById('restart-btn').addEventListener('click', async function() {
+        try {
+          await fetch(`/api/scan/restart/${sessionId}`, { method: 'POST' });
+          if (currentStep === 'doc_front') {
+            await initDocScan('doc_front');
+          } else if (currentStep === 'doc_back') {
+            await initDocScan('doc_back');
+          }
+        } catch (err) {
+          console.error("Error restarting scan:", err);
+        }
+      });
+
+      document.getElementById('capture-btn').addEventListener('click', function() {
+        if (currentStep === 'face') {
+          capturedFace = captureFrame();
+          const previewImg = document.getElementById('preview');
+          previewImg.src = capturedFace;
+          previewImg.style.display = 'block';
+          document.getElementById('capture-btn').style.display = 'none';
+          finalizeVerification();
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verification Start</title>
+    <script>
+        async function fetchStatus(sessionId) {
+            const response = await fetch(`/api/verification/check_status/${sessionId}`);
+            const data = await response.json();
+            if (response.ok) {
+                document.getElementById('requested_information').innerText = data.requested_information.split(';').join(', ');
+            } else {
+                alert('Failed to fetch status: ' + data);
+            }
+        }
+
+        async function cancelVerification(sessionId) {
+            const response = await fetch(`/api/verification/cancel/${sessionId}`, { method: 'DELETE' });
+            if (response.ok) {
+                alert('Verification cancelled');
+            } else {
+                alert('Failed to cancel verification');
+            }
+        }
+
+        function startVerification(sessionId) {
+            window.location.href = `/verify/${sessionId}/scan`;
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const sessionId = '{{ session_id }}';
+            fetchStatus(sessionId);
+        });
+    </script>
+</head>
+<body>
+    <h1>Verification Process</h1>
+    <p>Requested Information: <span id="requested_information"></span></p>
+    <button onclick="cancelVerification('{{ session_id }}')">Cancel</button>
+    <button onclick="startVerification('{{ session_id }}')">Start</button>
+</body>
+</html>

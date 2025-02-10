@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  mysql:
+    image: mysql:latest
+    environment:
+      MYSQL_DATABASE: db
+      MYSQL_USER: user
+    env_file:
+      - secrets.env
+
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: user
+    env_file:
+      - secrets.env
+    depends_on:
+      - mysql
